@@ -18,17 +18,13 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
-_BASE_URL = os.environ.get("OPEN_NOTEBOOK_BASE_URL", "")
-if not _BASE_URL:
-    print(json.dumps({"error": True, "status": 0, "message": "OPEN_NOTEBOOK_BASE_URL env var is not set"}))
-    sys.exit(1)
-BASE_URL = _BASE_URL
+BASE_URL = os.environ.get("OPEN_NOTEBOOK_BASE_URL", "")
 API_KEY = os.environ.get("OPEN_NOTEBOOK_API_KEY", "")
 
 
 def api_request(method, path, body=None, params=None):
     """Make an API request and return parsed JSON."""
-    url = BASE_URL + path
+    url = urllib.parse.urljoin(BASE_URL, path)
     if params:
         qs = urllib.parse.urlencode(params)
         url += "?" + qs
@@ -72,7 +68,7 @@ def bool_arg(val):
         return True
     if val.lower() in ("false", "0", "no"):
         return False
-    return None
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {val!r}")
 
 
 # ─── NOTEBOOKS ────────────────────────────────────────────────────────────────
@@ -265,6 +261,9 @@ def search_query(args):
 # ─── PARSER ───────────────────────────────────────────────────────────────────
 
 def main():
+    if not BASE_URL:
+        print(json.dumps({"error": True, "status": 0, "message": "OPEN_NOTEBOOK_BASE_URL env var is not set"}))
+        sys.exit(1)
     parser = argparse.ArgumentParser(
         description="Open Notebook API CLI — manage notebooks, sources, notes, insights, search"
     )
