@@ -3,6 +3,7 @@ name: open-notebook
 en_name: "Open Notebook"
 emoji: "📓"
 description: "Manage Open Notebook knowledge base — notebooks, sources, notes, insights, search. Structured CLI-backed workflows for agent automation."
+version: 1.0.0
 author: ikelvingo
 github: https://github.com/ikelvingo/open-notebook-skill
 category: productivity
