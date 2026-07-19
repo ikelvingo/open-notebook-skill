@@ -419,9 +419,9 @@ def main():
     srch = sub.add_parser("search", help="Search knowledge base")
     srch_sub = srch.add_subparsers(dest="action")
 
-    p = srch_sub.add_parser("query", help="Semantic/full-text search")
+    p = srch_sub.add_parser("query", help="Text search or vector semantic search (vector recommended)")
     p.add_argument("--query", required=True, help="Search query")
-    p.add_argument("--type", default="text", help="Search type: text or vector")
+    p.add_argument("--type", default="vector", help="Search type: vector (recommended) or text")
     p.add_argument("--limit", type=int, default=10, help="Max results")
     p.add_argument("--search-sources", type=bool_arg, default=True, help="Search sources")
     p.add_argument("--search-notes", type=bool_arg, default=True, help="Search notes")

@@ -51,9 +51,14 @@ python open_notebook.py insight save-as-note <insight-id> --notebook_id <id>
 
 ### Pattern B: Search
 
+Search supports two modes: **vector** (semantic, strongly recommended) and **text** (keyword). Default is vector.
+
 ```bash
-python open_notebook.py search query --query "keyword" --type text --limit 10
-python open_notebook.py search query --query "semantic concept" --type vector --limit 10
+# Vector semantic search (recommended)
+python open_notebook.py search query --query "agent architecture" --limit 10
+
+# Text keyword search
+python open_notebook.py search query --query "API error" --type text --limit 10
 ```
 
 ### CRUD
