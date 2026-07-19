@@ -3,7 +3,7 @@ name: open-notebook
 en_name: "Open Notebook"
 emoji: "📓"
 description: "Manage Open Notebook knowledge base — notebooks, sources, notes, insights, search. Structured CLI-backed workflows for agent automation."
-version: 1.0.0
+version: 1.1.0
 author: ikelvingo
 github: https://github.com/ikelvingo/open-notebook-skill
 category: productivity
@@ -32,6 +32,34 @@ search     query
 ```
 
 Use `python open_notebook.py --help` or `python open_notebook.py <resource> <action> --help` for full argument details.
+
+## Agent Decision Harness
+
+### 1. Entry point
+
+Every operation starts with `python open_notebook.py <resource> <action>`. If unsure which action to call, run `python open_notebook.py <resource> --help`.
+
+### 2. Resolve notebook name vs id
+
+A notebook reference is either an **id** or a **name**:
+
+- Starts with `notebook:` (e.g. `notebook:abc123`) → use it as an id directly.
+- Plain text (e.g. "Research", "我的笔记") → it is a **name**, not an id. Resolve it by listing notebooks:
+  1. `python open_notebook.py notebook list`
+  2. Find the entry whose `name` matches exactly or closely.
+  3. Capture its `id` field and use that id for the next command.
+
+Never pass a plain notebook name to `--notebook_id`.
+
+### 3. Route by user intent
+
+| User intent | Route |
+|-------------|-------|
+| "create notebook X" | `notebook create --name "X"` |
+| "save to notebook X" / "add to notebook X" / "保存到 X 笔记本" | `notebook list` → match name → `source create ... --notebook_id <resolved_id>` |
+| "save to notebook:id" | `source create ... --notebook_id notebook:id` |
+
+Only create a notebook when the user explicitly says **create**. For save/add intents, always look up the notebook first and then create the source.
 
 ## Core Patterns
 
