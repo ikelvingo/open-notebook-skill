@@ -3,7 +3,7 @@ name: open-notebook
 en_name: "Open Notebook"
 emoji: "📓"
 description: "Manage Open Notebook knowledge base — notebooks, sources, notes, insights, search. Structured CLI-backed workflows for agent automation."
-version: 1.1.0
+version: 1.1.1
 author: ikelvingo
 github: https://github.com/ikelvingo/open-notebook-skill
 category: productivity
@@ -60,6 +60,31 @@ Never pass a plain notebook name to `--notebook_id`.
 | "save to notebook:id" | `source create ... --notebook_id notebook:id` |
 
 Only create a notebook when the user explicitly says **create**. For save/add intents, always look up the notebook first and then create the source.
+
+## Source Ingestion Rules
+
+### 1. Strip internal reasoning before saving
+
+When saving conversation context or user discussions, extract **only final conclusions, decisions, facts, and user-facing content**. Strip reasoning chains, tool-call traces, and internal deliberation.
+
+### 2. Prefer `file` over `text` for formatted content
+
+| Content | Source type |
+|---------|-------------|
+| Web page | `url` |
+| Short single-line plain text | `text` |
+| Markdown, multi-paragraph, code blocks, tables, or any structured content | `file` (write to a temp `.md` file first) |
+
+### 3. Never pass multi-line content via `--type text --content`
+
+Shell escaping turns actual newlines into literal `\n` characters, corrupting Markdown and breaking formatting. For any content that contains line breaks, always:
+
+1. Write it to a temporary `.md` file.
+2. Use `source create --type file --file_path /path/to/temp.md --notebook_id <id>`.
+
+### 4. Default to Markdown for saved context
+
+When a user asks to "save this discussion/context to Open Notebook", synthesize the outcome into clean Markdown and upload it as a `file`-type source. Do not dump raw message history.
 
 ## Core Patterns
 
