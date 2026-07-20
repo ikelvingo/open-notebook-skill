@@ -21,8 +21,6 @@ A Python CLI (`open_notebook.py`) wraps every endpoint. **All data operations go
 - `OPEN_NOTEBOOK_BASE_URL` (**required**) — API base URL
 - `OPEN_NOTEBOOK_API_KEY` (optional) — sent as `x-api-key` header
 
-Set these in `.agent/env` or shell config so they persist across sessions.
-
 ## Command Tree
 
 ```
