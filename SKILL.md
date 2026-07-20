@@ -3,7 +3,7 @@ name: open-notebook
 en_name: "Open Notebook"
 emoji: "📓"
 description: "Manage Open Notebook knowledge base — notebooks, sources, notes, insights, search. Structured CLI-backed workflows for agent automation."
-version: 1.1.1
+version: 1.1.2
 author: ikelvingo
 github: https://github.com/ikelvingo/open-notebook-skill
 category: productivity
@@ -20,6 +20,8 @@ A Python CLI (`open_notebook.py`) wraps every endpoint. **All data operations go
 
 - `OPEN_NOTEBOOK_BASE_URL` (**required**) — API base URL
 - `OPEN_NOTEBOOK_API_KEY` (optional) — sent as `x-api-key` header
+
+Set these in `.agent/env` or shell config so they persist across sessions.
 
 ## Command Tree
 
@@ -39,69 +41,56 @@ Use `python open_notebook.py --help` or `python open_notebook.py <resource> <act
 
 Every operation starts with `python open_notebook.py <resource> <action>`. If unsure which action to call, run `python open_notebook.py <resource> --help`.
 
-### 2. Resolve notebook name vs id
+### 2. Resolve notebook references
 
 A notebook reference is either an **id** or a **name**:
 
 - Starts with `notebook:` (e.g. `notebook:abc123`) → use it as an id directly.
-- Plain text (e.g. "Research", "我的笔记") → it is a **name**, not an id. Resolve it by listing notebooks:
+- Plain text (e.g. "Research") → it is a **name**, not an id. Resolve it strictly:
   1. `python open_notebook.py notebook list`
-  2. Find the entry whose `name` matches exactly or closely.
-  3. Capture its `id` field and use that id for the next command.
+  2. Find the entry whose `name` matches **exactly**.
+  3. If no exact match exists, ask the user whether to create a new notebook or clarify the name.
+  4. Capture the `id` field and use it for the next command.
 
 Never pass a plain notebook name to `--notebook_id`.
 
-### 3. Route by user intent
+### 3. Route by intent
 
 | User intent | Route |
 |-------------|-------|
 | "create notebook X" | `notebook create --name "X"` |
-| "save to notebook X" / "add to notebook X" / "保存到 X 笔记本" | `notebook list` → match name → `source create ... --notebook_id <resolved_id>` |
+| "save/add ... to notebook X" | `notebook list` → exact name match → `source create ... --notebook_id <resolved_id>` |
 | "save to notebook:id" | `source create ... --notebook_id notebook:id` |
 
 Only create a notebook when the user explicitly says **create**. For save/add intents, always look up the notebook first and then create the source.
 
 ## Source Ingestion Rules
 
-### 1. Strip internal reasoning before saving
+When saving content to Open Notebook:
 
-When saving conversation context or user discussions, extract **only final conclusions, decisions, facts, and user-facing content**. Strip reasoning chains, tool-call traces, and internal deliberation.
-
-### 2. Prefer `file` over `text` for formatted content
-
-| Content | Source type |
-|---------|-------------|
-| Web page | `url` |
-| Short single-line plain text | `text` |
-| Markdown, multi-paragraph, code blocks, tables, or any structured content | `file` (write to a temp `.md` file first) |
-
-### 3. Never pass multi-line content via `--type text --content`
-
-Shell escaping turns actual newlines into literal `\n` characters, corrupting Markdown and breaking formatting. For any content that contains line breaks, always:
-
-1. Write it to a temporary `.md` file.
-2. Use `source create --type file --file_path /path/to/temp.md --notebook_id <id>`.
-
-### 4. Default to Markdown for saved context
-
-When a user asks to "save this discussion/context to Open Notebook", synthesize the outcome into clean Markdown and upload it as a `file`-type source. Do not dump raw message history.
+1. **Strip internal reasoning.** Keep only final conclusions, decisions, facts, and user-facing content. Remove reasoning chains and tool-call traces.
+2. **Prefer `file` over `text`.** Use `text` only for short single-line plain text. For markdown, code, tables, or any multi-line content, write to a temporary `.md` file in the workspace and use `--type file --file_path <path>`. Clean up the temp file after the source is created.
+3. **Never put multi-line content in `--content`.** Shell escaping turns real newlines into literal `\n`, corrupting formatting.
+4. **Synthesize discussions into clean Markdown.** Do not dump raw message history.
 
 ## Core Patterns
 
 ### Pattern A: Create → Poll → Use (sources, insights)
 
-Sources and insights are processed asynchronously. After creation, poll until ready:
+Sources and insights are processed asynchronously. Poll until status is `completed` or `failed`:
 
 ```bash
 python open_notebook.py source create --type url --url "https://example.com" --notebook_id <id>
 python open_notebook.py source status <source-id>
-# if failed → python open_notebook.py source retry <source-id>
+# if failed: python open_notebook.py source retry <source-id>
 
 python open_notebook.py insight create <source-id> --transformation_id <transform-id>
-python open_notebook.py insight list <source-id>       # poll until new insight appears
+python open_notebook.py insight list <source-id>  # poll until new insight appears
 python open_notebook.py insight get <insight-id>
 python open_notebook.py insight save-as-note <insight-id> --notebook_id <id>
 ```
+
+Poll every few seconds.
 
 ### Pattern B: Search
 
@@ -134,10 +123,7 @@ Standard `list | get | create | update | delete` for notebooks, sources, and not
 | `422` | Validation error | Read `message` field for details |
 | `500` | Server error | Retry once; if persists, notify user |
 
-## Agent Rules
+## Reminders
 
-1. **Always use the CLI.** The CLI guarantees stable field names and auth.
-2. **Always capture `id`** from `create` and `list` responses. It is needed for all subsequent operations.
-3. **Poll async operations.** `source create` → `source status`; `insight create` → `insight list`. Do not assume instant completion.
-4. **Check before delete.** Use `notebook preview-delete` to see cascading impact before `notebook delete`.
-5. **Set env vars in profile** (`.agent/env` or shell config) for cross-session persistence.
+- **Capture `id`** from `create` and `list` responses; all subsequent operations need it.
+- **Check before delete.** Use `notebook preview-delete` to see cascading impact before `notebook delete`.
