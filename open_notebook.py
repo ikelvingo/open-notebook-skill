@@ -12,8 +12,10 @@ All commands output JSON to stdout for reliable agent parsing.
 """
 import argparse
 import json
+import mimetypes
 import os
 import sys
+import uuid
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -21,9 +23,21 @@ import urllib.parse
 BASE_URL = os.environ.get("OPEN_NOTEBOOK_BASE_URL", "")
 API_KEY = os.environ.get("OPEN_NOTEBOOK_API_KEY", "")
 
+# The API accepts exactly three source types (SourceCreate.type).
+# Earlier docs called them url/file/text; the server rejects those with 400.
+# Legacy aliases are translated here so old invocations keep working.
+SOURCE_TYPE_ALIASES = {
+    "url": "link",
+    "link": "link",
+    "upload": "upload",
+    "file": "upload",
+    "text": "text",
+}
+VALID_SOURCE_TYPES = ("link", "upload", "text")
+
 
 def api_request(method, path, body=None, params=None):
-    """Make an API request and return parsed JSON."""
+    """Make a JSON API request and return parsed JSON. `body` is a dict."""
     url = urllib.parse.urljoin(BASE_URL, path)
     if params:
         qs = urllib.parse.urlencode(params)
@@ -55,6 +69,84 @@ def api_request(method, path, body=None, params=None):
         return {"error": True, "status": 0, "message": str(e.reason)}
     except Exception as e:
         return {"error": True, "status": 0, "message": str(e)}
+
+
+def api_multipart(method, path, fields, file_field=None, file_path=None):
+    """POST multipart/form-data with plain fields and at most one file.
+
+    This is the only way to create `link` and `upload` sources — POST
+    /api/sources/json is a plain-JSON endpoint that cannot carry a file body.
+    """
+    url = urllib.parse.urljoin(BASE_URL, path)
+    boundary = "----HermesOpenNotebook" + uuid.uuid4().hex
+    crlf = b"\r\n"
+    buf = bytearray()
+
+    def field(name, value):
+        out = ("--" + boundary).encode() + crlf
+        out += ('Content-Disposition: form-data; name="%s"' % name).encode() + crlf
+        out += crlf
+        out += (value if isinstance(value, str) else str(value)).encode("utf-8") + crlf
+        return out
+
+    for name, value in fields:
+        if value is None:
+            continue
+        buf += field(name, value)
+
+    if file_field and file_path:
+        with open(file_path, "rb") as fh:
+            payload = fh.read()
+        ctype = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+        buf += ("--" + boundary).encode() + crlf
+        buf += (
+            'Content-Disposition: form-data; name="%s"; filename="%s"'
+            % (file_field, os.path.basename(file_path))
+        ).encode() + crlf
+        buf += ("Content-Type: %s" % ctype).encode() + crlf
+        buf += crlf
+        buf += payload + crlf
+
+    buf += ("--" + boundary + "--").encode() + crlf
+
+    headers = {"Content-Type": "multipart/form-data; boundary=%s" % boundary}
+    if API_KEY:
+        headers["x-api-key"] = API_KEY
+    req = urllib.request.Request(url, data=bytes(buf), headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw.strip() else {"success": True}
+    except urllib.error.HTTPError as e:
+        body_txt = ""
+        try:
+            body_txt = e.read().decode("utf-8")
+        except Exception:
+            pass
+        return {"error": True, "status": e.code, "message": body_txt}
+    except urllib.error.URLError as e:
+        return {"error": True, "status": 0, "message": str(e.reason)}
+    except Exception as e:
+        return {"error": True, "status": 0, "message": str(e)}
+
+
+def api_download(path):
+    """Stream a binary endpoint (e.g. original uploaded file) to stdout bytes."""
+    url = urllib.parse.urljoin(BASE_URL, path)
+    headers = {}
+    if API_KEY:
+        headers["x-api-key"] = API_KEY
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        return resp.read()
+
+
+def normalize_source_type(raw):
+    """Map legacy source type names onto the three the server accepts."""
+    val = (raw or "").strip().lower()
+    if val not in SOURCE_TYPE_ALIASES:
+        return None
+    return SOURCE_TYPE_ALIASES[val]
 
 
 def output(data):
@@ -145,18 +237,72 @@ def source_get(args):
 
 
 def source_create(args):
-    body = {"type": args.type}
-    if args.url:
-        body["url"] = args.url
-    if args.content:
-        body["content"] = args.content
-    if args.title:
-        body["title"] = args.title
-    if args.notebook_id:
-        body["notebook_id"] = args.notebook_id
-    if args.file_path:
-        body["file_path"] = args.file_path
-    output(api_request("POST", "/api/sources/json", body=body))
+    stype = normalize_source_type(args.type)
+    if stype is None:
+        output({
+            "error": True,
+            "message": "invalid --type %r; valid types: link, upload, text "
+                       "(aliases: url→link, file→upload)" % args.type,
+        })
+        return
+    if stype == "upload" and not args.file_path:
+        output({"error": True, "message": "--type upload requires --file_path"})
+        return
+    if stype == "upload" and not os.path.exists(args.file_path):
+        output({"error": True, "message": "file not found: %s" % args.file_path})
+        return
+
+    fields = [("type", stype), ("title", args.title), ("content", args.content)]
+    if stype == "upload":
+        fields.append(("url", args.url))
+
+    # Only `upload` carries a file body, so only that type uses multipart.
+    # `link` and `text` go through the JSON endpoint.
+    if stype == "upload":
+        fields.append(("embed", str(args.embed).lower()))
+        if args.async_processing is not None:
+            fields.append(("async_processing", str(args.async_processing).lower()))
+        if args.delete_source is not None:
+            fields.append(("delete_source", str(args.delete_source).lower()))
+        res = api_multipart(
+            "POST", "/api/sources",
+            [(n, v) for n, v in fields if v is not None],
+            file_field="file", file_path=args.file_path,
+        )
+    else:
+        body = {"type": stype}
+        if args.url:
+            body["url"] = args.url
+        if args.content:
+            body["content"] = args.content
+        if args.title:
+            body["title"] = args.title
+        if args.notebook_id:
+            body["notebook_id"] = args.notebook_id
+        if args.embed:
+            body["embed"] = True
+        if args.async_processing is not None:
+            body["async_processing"] = args.async_processing
+        res = api_request("POST", "/api/sources/json", body=body)
+    output(res)
+
+
+def source_download(args):
+    """Fetch the original uploaded file for a source."""
+    try:
+        blob = api_download("/api/sources/%s/download" % args.source_id)
+    except urllib.error.HTTPError as e:
+        output({"error": True, "status": e.code, "message": "download failed"})
+        return
+    except urllib.error.URLError as e:
+        output({"error": True, "status": 0, "message": str(e.reason)})
+        return
+    if args.out:
+        with open(args.out, "wb") as fh:
+            fh.write(blob)
+        output({"success": True, "path": args.out, "bytes": len(blob)})
+    else:
+        sys.stdout.buffer.write(blob)
 
 
 def source_update(args):
@@ -333,13 +479,26 @@ def main():
     p.set_defaults(func=source_get)
 
     p = src_sub.add_parser("create", help="Create a source")
-    p.add_argument("--type", required=True, help="Source type (url, file, text)")
-    p.add_argument("--url", default=None, help="URL for url-type sources")
+    p.add_argument("--type", required=True,
+                   help="Source type: link (alias url), upload (alias file), text")
+    p.add_argument("--url", default=None, help="URL for link-type sources")
     p.add_argument("--content", default=None, help="Content for text-type sources")
     p.add_argument("--title", default=None, help="Source title")
     p.add_argument("--notebook_id", default=None, help="Attach to notebook")
-    p.add_argument("--file_path", default=None, help="Local file path")
+    p.add_argument("--file_path", default=None, help="Local file path (upload type)")
+    p.add_argument("--embed", type=bool_arg, default=True,
+                   help="Embed content so vector search can reach it (default true; "
+                        "server default is false, which silently yields 0 chunks)")
+    p.add_argument("--async_processing", type=bool_arg, default=None,
+                   help="Process source asynchronously (default server-side)")
+    p.add_argument("--delete_source", type=bool_arg, default=None,
+                   help="Delete the uploaded file after processing")
     p.set_defaults(func=source_create)
+
+    p = src_sub.add_parser("download", help="Download the original uploaded file")
+    p.add_argument("source_id", help="Source ID")
+    p.add_argument("--out", default=None, help="Local path to write (default: stdout)")
+    p.set_defaults(func=source_download)
 
     p = src_sub.add_parser("update", help="Update a source")
     p.add_argument("source_id", help="Source ID")
@@ -419,9 +578,9 @@ def main():
     srch = sub.add_parser("search", help="Search knowledge base")
     srch_sub = srch.add_subparsers(dest="action")
 
-    p = srch_sub.add_parser("query", help="Semantic/full-text search")
+    p = srch_sub.add_parser("query", help="Text search or vector semantic search (vector recommended)")
     p.add_argument("--query", required=True, help="Search query")
-    p.add_argument("--type", default="text", help="Search type: text or vector")
+    p.add_argument("--type", default="vector", help="Search type: vector (recommended) or text")
     p.add_argument("--limit", type=int, default=10, help="Max results")
     p.add_argument("--search-sources", type=bool_arg, default=True, help="Search sources")
     p.add_argument("--search-notes", type=bool_arg, default=True, help="Search notes")
